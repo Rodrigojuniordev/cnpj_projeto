@@ -1,0 +1,6 @@
+FROM mysql:8.0
+
+# Configuração para permitir LOAD DATA LOCAL INFILE
+RUN echo "[mysqld]\nlocal_infile=1\nsql_mode=''\ncharacter-set-server=utf8mb4\ncollation-server=utf8mb4_unicode_ci\nmax_allowed_packet=1G\ninnodb_buffer_pool_size=2G" > /etc/mysql/conf.d/custom.cnf
+
+EXPOSE 3306
