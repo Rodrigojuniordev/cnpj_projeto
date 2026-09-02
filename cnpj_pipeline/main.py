@@ -7,6 +7,8 @@ from sqlalchemy import create_engine, text
 import sys
 import re
 import time
+import hashlib
+import json
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -15,7 +17,8 @@ load_dotenv()
 
 # ===== CONFIGURAÇÕES =====
 PASTA_DOWNLOADS = "./downloads"
-ANO_MES = os.getenv("ANO_MES", "2026-08")
+PASTA_STATE = "./state"
+ANO_MES = os.getenv("COMPETENCIA", "2026-08")
 
 DB_USER = os.getenv("DB_USER", "root")
 DB_PASS = os.getenv("DB_PASS", "u62iqi4i")
@@ -24,6 +27,7 @@ DB_PORT = int(os.getenv("DB_PORT", 3306))
 DB_NAME = os.getenv("DB_NAME", "cnpj_db")
 
 os.makedirs(PASTA_DOWNLOADS, exist_ok=True)
+os.makedirs(PASTA_STATE, exist_ok=True)
 
 # Engine SQLAlchemy
 engine = create_engine(
@@ -35,10 +39,41 @@ engine = create_engine(
     pool_recycle=3600
 )
 
-# ===== FUNÇÕES AUXILIARES =====
+# ===== FUNÇÕES DE HASH =====
+
+def calcular_md5(caminho_arquivo):
+    """Calcula o MD5 de um arquivo"""
+    hash_md5 = hashlib.md5()
+    try:
+        with open(caminho_arquivo, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    except Exception as e:
+        print("ERRO ao calcular MD5: {}".format(str(e)))
+        return None
+
+def carregar_hashes():
+    """Carrega os hashes salvos do mês anterior"""
+    arquivo_hash = os.path.join(PASTA_STATE, "hashes_{}.json".format(ANO_MES))
+    if os.path.exists(arquivo_hash):
+        try:
+            with open(arquivo_hash, 'r') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+def salvar_hashes(hashes):
+    """Salva os hashes do mês atual"""
+    arquivo_hash = os.path.join(PASTA_STATE, "hashes_{}.json".format(ANO_MES))
+    with open(arquivo_hash, 'w') as f:
+        json.dump(hashes, f, indent=4)
+    print("✅ Hashes salvos em: {}".format(arquivo_hash))
+
+# ===== FUNÇÕES PRINCIPAIS =====
 
 def executar_query(sql):
-    """Executa uma query SQL"""
     try:
         with engine.begin() as conexao:
             conexao.execute(text(sql))
@@ -57,27 +92,14 @@ def obter_links_zip():
             "PROPFIND",
             url,
             auth=("YggdBLfdninEJX9", ""),
-            headers={
-                "Depth": "1",
-                "Content-Type": "application/xml"
-            },
+            headers={"Depth": "1", "Content-Type": "application/xml"},
             timeout=30
         )
         
-        print("Status WebDAV: {}".format(response.status_code))
-        
         if response.status_code not in [200, 207]:
-            print("WebDAV retornou status inesperado: {}".format(response.status_code))
             return []
         
-        try:
-            root = ET.fromstring(response.content)
-        except ET.ParseError as e:
-            print("ERRO ao parsear XML: {}".format(e))
-            print("Conteúdo recebido (primeiros 200 chars):")
-            print(response.text[:200])
-            return []
-        
+        root = ET.fromstring(response.content)
         ns = {'d': 'DAV:'}
         links = []
         
@@ -89,9 +111,8 @@ def obter_links_zip():
                 else:
                     link = caminho
                 links.append(link)
-                print("  Encontrado: {}".format(os.path.basename(link)))
         
-        print("\n✅ Total: {} arquivos .zip encontrados".format(len(links)))
+        print("✅ Total: {} arquivos .zip encontrados".format(len(links)))
         return links
         
     except Exception as e:
@@ -99,80 +120,57 @@ def obter_links_zip():
         return []
 
 def baixar_arquivo(url, pasta_destino):
-    """Baixa um arquivo via WebDAV"""
+    """Baixa um arquivo via WebDAV e retorna o caminho e hash"""
     nome_arquivo = os.path.basename(url)
-    if not nome_arquivo.endswith('.zip'):
-        nome_arquivo = "temp_{}.zip".format(int(time.time()))
-    
     caminho_zip = os.path.join(pasta_destino, nome_arquivo)
     
+    # Verifica se já existe e calcula hash
     if os.path.exists(caminho_zip):
-        print("⏭️ Arquivo já baixado: {}".format(nome_arquivo))
-        return caminho_zip
+        hash_existente = calcular_md5(caminho_zip)
+        if hash_existente:
+            print("⏭️ Arquivo já existe: {} (MD5: {})".format(nome_arquivo, hash_existente[:8] + "..."))
+            return caminho_zip, hash_existente
     
     print("⬇️ Baixando {}...".format(nome_arquivo))
     
     try:
         with requests.get(url, auth=("YggdBLfdninEJX9", ""), stream=True, timeout=120) as r:
             r.raise_for_status()
-            
-            total_size = int(r.headers.get('content-length', 0))
-            block_size = 1024 * 1024  # 1MB
-            
             with open(caminho_zip, 'wb') as f:
-                downloaded = 0
-                for chunk in r.iter_content(chunk_size=block_size):
+                for chunk in r.iter_content(chunk_size=1024*1024):
                     if chunk:
                         f.write(chunk)
-                        downloaded += len(chunk)
-                        if total_size > 0:
-                            progresso = (downloaded / total_size) * 100
-                            print("\r  Progresso: {:.1f}%".format(progresso), end='')
-                print()
         
-        return caminho_zip
+        # Calcula hash do arquivo baixado
+        hash_arquivo = calcular_md5(caminho_zip)
+        print("  ✅ Download concluído (MD5: {})".format(hash_arquivo[:8] + "..."))
+        return caminho_zip, hash_arquivo
+        
     except Exception as e:
         print("ERRO ao baixar: {}".format(str(e)))
-        return None
+        return None, None
 
 def extrair_zip(caminho_zip):
-    """Extrai arquivo ZIP e retorna o caminho do arquivo de dados"""
     try:
         pasta_destino = os.path.dirname(caminho_zip)
         nome_sem_zip = os.path.splitext(os.path.basename(caminho_zip))[0]
         pasta_extraida = os.path.join(pasta_destino, nome_sem_zip)
         
-        print("📦 Extraindo {}...".format(os.path.basename(caminho_zip)))
-        
         with zipfile.ZipFile(caminho_zip, 'r') as zip_ref:
-            arquivos = zip_ref.namelist()
-            print("  Arquivos no ZIP: {}".format(arquivos))
             zip_ref.extractall(pasta_extraida)
         
-        arquivo_encontrado = None
         for root, dirs, files in os.walk(pasta_extraida):
             for file in files:
                 caminho_completo = os.path.join(root, file)
                 if os.path.getsize(caminho_completo) > 0:
-                    arquivo_encontrado = caminho_completo
-                    print("  ✅ Arquivo encontrado: {}".format(file))
-                    break
-            if arquivo_encontrado:
-                break
+                    return caminho_completo
         
-        if not arquivo_encontrado:
-            print("  ❌ Nenhum arquivo encontrado")
-            print("  Conteúdo da pasta: {}".format(os.listdir(pasta_extraida)))
-            return None
-        
-        return arquivo_encontrado
-        
+        return None
     except Exception as e:
         print("ERRO ao extrair: {}".format(str(e)))
         return None
 
 def processar_arquivo(caminho_arquivo, tipo):
-    """Processa arquivo baseado no tipo"""
     if not caminho_arquivo or not os.path.exists(caminho_arquivo):
         return False
     
@@ -242,40 +240,87 @@ def processar_arquivo(caminho_arquivo, tipo):
     else:
         return False
     
-    print("📥 Importando {}...".format(tipo))
     return executar_query(query)
 
-# ===== FUNÇÃO DE CONSOLIDAÇÃO COM LIMPEZA AUTOMÁTICA =====
-
 def consolidar_dados():
-    """Consolida dados das staging para as tabelas oficiais e limpa staging"""
-    print("\n🔄 CONSOLIDANDO DADOS (IGNORANDO DUPLICATAS)...")
+    """Consolida dados das staging para as tabelas oficiais (INCREMENTAL)"""
+    print("\n🔄 CONSOLIDANDO DADOS (INCREMENTAL)...")
     
     print("  Sincronizando Empresas...")
     executar_query("""
-    INSERT IGNORE INTO empresas
-    SELECT DISTINCT stg.* FROM empresas_staging stg;
+    INSERT INTO empresas
+    SELECT DISTINCT stg.* FROM empresas_staging stg
+    ON DUPLICATE KEY UPDATE 
+        razao_social = VALUES(razao_social),
+        natureza_juridica = VALUES(natureza_juridica),
+        qualificacao_responsavel = VALUES(qualificacao_responsavel),
+        capital_social = VALUES(capital_social),
+        porte_empresa = VALUES(porte_empresa),
+        ente_federativo_responsavel = VALUES(ente_federativo_responsavel);
     """)
     
     print("  Sincronizando Estabelecimentos...")
     executar_query("""
-    INSERT IGNORE INTO estabelecimentos
-    SELECT DISTINCT stg.* FROM estabelecimentos_staging stg;
+    INSERT INTO estabelecimentos
+    SELECT DISTINCT stg.* FROM estabelecimentos_staging stg
+    ON DUPLICATE KEY UPDATE 
+        identificador_matriz_filial = VALUES(identificador_matriz_filial),
+        nome_fantasia = VALUES(nome_fantasia),
+        situacao_cadastral = VALUES(situacao_cadastral),
+        data_situacao_cadastral = VALUES(data_situacao_cadastral),
+        motivo_situacao_cadastral = VALUES(motivo_situacao_cadastral),
+        nome_cidade_exterior = VALUES(nome_cidade_exterior),
+        pais = VALUES(pais),
+        data_inicio_atividade = VALUES(data_inicio_atividade),
+        cnae_fiscal_principal = VALUES(cnae_fiscal_principal),
+        cnae_fiscal_secundaria = VALUES(cnae_fiscal_secundaria),
+        tipo_logradouro = VALUES(tipo_logradouro),
+        logradouro = VALUES(logradouro),
+        numero = VALUES(numero),
+        complemento = VALUES(complemento),
+        bairro = VALUES(bairro),
+        cep = VALUES(cep),
+        uf = VALUES(uf),
+        municipio = VALUES(municipio),
+        ddd1 = VALUES(ddd1),
+        telefone1 = VALUES(telefone1),
+        ddd2 = VALUES(ddd2),
+        telefone2 = VALUES(telefone2),
+        ddd_fax = VALUES(ddd_fax),
+        fax = VALUES(fax),
+        correio_eletronico = VALUES(correio_eletronico),
+        situacao_especial = VALUES(situacao_especial),
+        data_situacao_especial = VALUES(data_situacao_especial);
     """)
     
     print("  Sincronizando Sócios...")
     executar_query("""
-    INSERT IGNORE INTO socios
-    SELECT DISTINCT stg.* FROM socios_staging stg;
+    INSERT INTO socios
+    SELECT DISTINCT stg.* FROM socios_staging stg
+    ON DUPLICATE KEY UPDATE 
+        identificador_socio = VALUES(identificador_socio),
+        nome_socio_razao_social = VALUES(nome_socio_razao_social),
+        data_entrada_sociedade = VALUES(data_entrada_sociedade),
+        pais = VALUES(pais),
+        representante_legal = VALUES(representante_legal),
+        nome_do_representante = VALUES(nome_do_representante),
+        qualificacao_representante_legal = VALUES(qualificacao_representante_legal),
+        faixa_etaria = VALUES(faixa_etaria);
     """)
     
     print("  Sincronizando Simples...")
     executar_query("""
-    INSERT IGNORE INTO simples
-    SELECT DISTINCT stg.* FROM simples_staging stg;
+    INSERT INTO simples
+    SELECT DISTINCT stg.* FROM simples_staging stg
+    ON DUPLICATE KEY UPDATE 
+        opcao_simples = VALUES(opcao_simples),
+        data_opcao_simples = VALUES(data_opcao_simples),
+        data_exclusao_simples = VALUES(data_exclusao_simples),
+        opcao_mei = VALUES(opcao_mei),
+        data_opcao_mei = VALUES(data_opcao_mei),
+        data_exclusao_mei = VALUES(data_exclusao_mei);
     """)
     
-    # ===== LIMPEZA AUTOMÁTICA DAS STAGING =====
     print("\n🧹 Limpando tabelas staging...")
     executar_query("TRUNCATE TABLE empresas_staging;")
     executar_query("TRUNCATE TABLE estabelecimentos_staging;")
@@ -284,9 +329,8 @@ def consolidar_dados():
     print("✅ Staging limpas com sucesso!")
 
 def main():
-    """Função principal"""
     print("=" * 60)
-    print("🚀 IMPORTACAO DADOS RECEITA FEDERAL - {}".format(ANO_MES))
+    print("🚀 IMPORTACAO INCREMENTAL - {}".format(ANO_MES))
     print("=" * 60)
     
     # Verifica MySQL
@@ -311,14 +355,51 @@ def main():
         print("❌ Nenhum arquivo encontrado no diretório /{}".format(ANO_MES))
         return
     
+    # Carrega hashes anteriores
+    hashes_anteriores = carregar_hashes()
+    hashes_atuais = {}
+    arquivos_para_processar = []
+    
+    print("\n🔍 Verificando hashes dos arquivos...")
+    
+    for url in links:
+        nome_arquivo = os.path.basename(url)
+        
+        # Baixa o arquivo e calcula hash
+        caminho_zip, hash_atual = baixar_arquivo(url, PASTA_DOWNLOADS)
+        if not caminho_zip:
+            continue
+        
+        hashes_atuais[nome_arquivo] = hash_atual
+        
+        # Verifica se o hash mudou em relação ao mês anterior
+        if nome_arquivo in hashes_anteriores:
+            hash_anterior = hashes_anteriores[nome_arquivo]
+            if hash_anterior == hash_atual:
+                print("  ⏭️ {}: hash igual ao mês anterior - ignorando".format(nome_arquivo))
+                continue
+            else:
+                print("  🔄 {}: hash DIFERENTE - processando".format(nome_arquivo))
+        else:
+            print("  🆕 {}: arquivo novo - processando".format(nome_arquivo))
+        
+        arquivos_para_processar.append(url)
+    
+    # Salva os hashes atuais para o próximo mês
+    salvar_hashes(hashes_atuais)
+    
+    if not arquivos_para_processar:
+        print("\n✅ Nenhum arquivo novo para processar.")
+        return
+    
     # Limpa staging
     print("\n🧹 Limpando tabelas de staging...")
     for tabela in ['empresas_staging', 'estabelecimentos_staging', 'socios_staging', 'simples_staging']:
         executar_query("TRUNCATE TABLE {};".format(tabela))
     
-    # Processa cada arquivo
+    # Processa apenas arquivos com hash diferente
     arquivos_processados = 0
-    for url in links:
+    for url in arquivos_para_processar:
         nome_arquivo = url.upper()
         
         tipo = None
@@ -336,8 +417,9 @@ def main():
         
         print("\n📥 Processando {}...".format(tipo))
         
-        caminho_zip = baixar_arquivo(url, PASTA_DOWNLOADS)
-        if not caminho_zip:
+        caminho_zip = os.path.join(PASTA_DOWNLOADS, os.path.basename(url))
+        if not os.path.exists(caminho_zip):
+            print("  ❌ Arquivo não encontrado: {}".format(caminho_zip))
             continue
         
         caminho_txt = extrair_zip(caminho_zip)
@@ -358,14 +440,14 @@ def main():
         print("\n❌ Nenhum arquivo foi processado!")
         return
     
-    # Consolida e limpa staging automaticamente
+    # Consolida incremental
     consolidar_dados()
     
     executar_query("SET foreign_key_checks = 1;")
     executar_query("SET unique_checks = 1;")
     
     print("\n" + "=" * 60)
-    print("✅ IMPORTACAO CONCLUIDA COM SUCESSO!")
+    print("✅ IMPORTACAO INCREMENTAL CONCLUIDA!")
     print("📊 Arquivos processados: {}".format(arquivos_processados))
     print("=" * 60)
 
