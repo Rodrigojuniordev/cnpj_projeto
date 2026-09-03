@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  mysql:
+    build:
+      context: .
+      dockerfile: Dockerfile.mysql
+    container_name: mysql_cnpj
+    environment:
+      MYSQL_ROOT_PASSWORD: u62iqi4i
+      MYSQL_DATABASE: cnpj_db
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./downloads:/docker-entrypoint-initdb.d
+    command: 
+      - --local_infile=1
+      - --sql_mode=
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_allowed_packet=1G
+      - --innodb_buffer_pool_size=2G
+    restart: unless-stopped
+
+volumes:
+  mysql_data:
