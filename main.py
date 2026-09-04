@@ -19,6 +19,8 @@ PASTA_DOWNLOADS = "./downloads"
 PASTA_STATE = "./state"
 ANO_MES = os.getenv("COMPETENCIA", "2026-08")
 
+#excluir dados sensiveis do codigo
+
 DB_USER = os.getenv("DB_USER", "root")
 DB_PASS = os.getenv("DB_PASS", "u62iqi4i")
 DB_HOST = os.getenv("DB_HOST", "localhost")
