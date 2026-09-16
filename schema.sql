@@ -1,7 +1,7 @@
 CREATE DATABASE IF NOT EXISTS cnpj_db;
 USE cnpj_db;
 
--- 1. TABELAS OFICIAIS
+-- Tabelas principais
 CREATE TABLE IF NOT EXISTS empresas (
     cnpj_basico CHAR(8) NOT NULL,
     razao_social VARCHAR(150),
@@ -73,19 +73,63 @@ CREATE TABLE IF NOT EXISTS simples (
     PRIMARY KEY (cnpj_basico)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 2. TABELAS DE STAGING (sem chave primária)
-CREATE TABLE IF NOT EXISTS empresas_staging LIKE empresas;
-ALTER TABLE empresas_staging MODIFY cnpj_basico CHAR(8) NOT NULL; -- Garante que não seja PK
+-- Staging (sem chave primaria, para carga rapida)
+DROP TABLE IF EXISTS empresas_staging;
+CREATE TABLE empresas_staging LIKE empresas;
+ALTER TABLE empresas_staging DROP PRIMARY KEY;
 
-CREATE TABLE IF NOT EXISTS estabelecimentos_staging LIKE estabelecimentos;
-ALTER TABLE estabelecimentos_staging MODIFY cnpj_basico CHAR(8) NOT NULL;
-ALTER TABLE estabelecimentos_staging MODIFY cnpj_ordem CHAR(4) NOT NULL;
-ALTER TABLE estabelecimentos_staging MODIFY cnpj_dv CHAR(2) NOT NULL;
+DROP TABLE IF EXISTS estabelecimentos_staging;
+CREATE TABLE estabelecimentos_staging LIKE estabelecimentos;
+ALTER TABLE estabelecimentos_staging DROP PRIMARY KEY;
 
-CREATE TABLE IF NOT EXISTS socios_staging LIKE socios;
-ALTER TABLE socios_staging MODIFY cnpj_basico CHAR(8) NOT NULL;
-ALTER TABLE socios_staging MODIFY cpf_cnpj_socio VARCHAR(14) NOT NULL;
-ALTER TABLE socios_staging MODIFY qualificacao_socio INT NOT NULL;
+DROP TABLE IF EXISTS socios_staging;
+CREATE TABLE socios_staging LIKE socios;
+ALTER TABLE socios_staging DROP PRIMARY KEY;
 
-CREATE TABLE IF NOT EXISTS simples_staging LIKE simples;
-ALTER TABLE simples_staging MODIFY cnpj_basico CHAR(8) NOT NULL;
+DROP TABLE IF EXISTS simples_staging;
+CREATE TABLE simples_staging LIKE simples;
+ALTER TABLE simples_staging DROP PRIMARY KEY;
+
+-- Auxiliares
+CREATE TABLE IF NOT EXISTS cnaes (
+    codigo VARCHAR(20) PRIMARY KEY,
+    descricao VARCHAR(300)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS municipios (
+    codigo INT PRIMARY KEY,
+    nome VARCHAR(100),
+    uf CHAR(2)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS naturezas (
+    codigo INT PRIMARY KEY,
+    descricao VARCHAR(200)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS paises (
+    codigo INT PRIMARY KEY,
+    descricao VARCHAR(100)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS motivos (
+    codigo INT PRIMARY KEY,
+    descricao VARCHAR(100)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS qualificacoes (
+    codigo INT PRIMARY KEY,
+    descricao VARCHAR(100)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS portes (
+    codigo INT PRIMARY KEY,
+    descricao VARCHAR(50)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+INSERT IGNORE INTO portes (codigo, descricao) VALUES
+(0, 'NAO INFORMADO'),
+(1, 'MICRO EMPRESA'),
+(2, 'EMPRESA DE PEQUENO PORTE'),
+(3, 'EMPRESA DE MEDIO PORTE'),
+(4, 'GRANDE EMPRESA');
